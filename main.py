@@ -1297,6 +1297,10 @@ class Game:
             return
         k = event.key
 
+        # Hide on-screen touch controls whenever keyboard is used.
+        self._show_touch_controls = False
+        self._touch_seen = False
+
         wave = self._wave_from_key(k)
         if wave is not None:
             self._jump_to_wave(wave)
