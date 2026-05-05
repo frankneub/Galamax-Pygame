@@ -6,6 +6,7 @@ Controls:
   Arrow Keys / A D  - Move ship
   Space             - Fire
   Escape            - Return to menu
+    Touch (mobile)    - On-screen Left / Right / Fire buttons
 """
 
 import pygame
@@ -683,11 +684,17 @@ class Player:
             cls._sprite_cache[size] = None
         return cls._sprite_cache[size]
 
-    def update(self, keys):
-        if keys[pygame.K_LEFT]  or keys[pygame.K_a]: self.x -= self.SPEED
-        if keys[pygame.K_RIGHT] or keys[pygame.K_d]: self.x += self.SPEED
-        if keys[pygame.K_UP]    or keys[pygame.K_w]: self.y -= self.SPEED
-        if keys[pygame.K_DOWN]  or keys[pygame.K_s]: self.y += self.SPEED
+    def update(self, keys, touch=None):
+        touch = touch or {}
+        move_left = keys[pygame.K_LEFT] or keys[pygame.K_a] or touch.get("left", False)
+        move_right = keys[pygame.K_RIGHT] or keys[pygame.K_d] or touch.get("right", False)
+        move_up = keys[pygame.K_UP] or keys[pygame.K_w] or touch.get("up", False)
+        move_down = keys[pygame.K_DOWN] or keys[pygame.K_s] or touch.get("down", False)
+
+        if move_left: self.x -= self.SPEED
+        if move_right: self.x += self.SPEED
+        if move_up: self.y -= self.SPEED
+        if move_down: self.y += self.SPEED
         self.x = max(self.size, min(SCREEN_W - self.size, self.x))
         self.y = max(150, min(SCREEN_H - 50, self.y))
         if self.invincible > 0: self.invincible -= 1
@@ -794,6 +801,10 @@ class Game:
         self._flash_alpha  = 0
         self._flash_decay  = 0
         self._restart_lock_until = 0
+        self._touch_contacts = {}
+        self._touch_state = {"left": False, "right": False, "up": False, "down": False, "fire": False}
+        self._touch_seen = False
+        self._show_touch_controls = (sys.platform == "emscripten")
         self.state = MENU
         self._reset()
         self.sfx.stop_beat()
@@ -977,6 +988,52 @@ class Game:
     def _max_enemy_bullets_for_wave(self):
         return min(18, self.MAX_ENEMY_BULLETS + (self.level - 1))
 
+    def _touch_buttons(self):
+        # Big targets improve mobile control reliability.
+        left = pygame.Rect(26, SCREEN_H - 124, 84, 84)
+        right = pygame.Rect(124, SCREEN_H - 124, 84, 84)
+        fire = pygame.Rect(SCREEN_W - 134, SCREEN_H - 134, 108, 108)
+        return left, right, fire
+
+    def _actions_for_touch_point(self, x, y):
+        actions = set()
+        left, right, fire = self._touch_buttons()
+        if left.collidepoint(x, y):
+            actions.add("left")
+        if right.collidepoint(x, y):
+            actions.add("right")
+        if fire.collidepoint(x, y):
+            actions.add("fire")
+        return actions
+
+    def _rebuild_touch_state(self):
+        self._touch_state = {"left": False, "right": False, "up": False, "down": False, "fire": False}
+        for actions in self._touch_contacts.values():
+            for action in actions:
+                self._touch_state[action] = True
+
+    def _clear_touch_state(self):
+        self._touch_contacts.clear()
+        self._rebuild_touch_state()
+
+    def _handle_touch_event(self, event):
+        self._touch_seen = True
+        self._show_touch_controls = True
+
+        if event.type == pygame.FINGERUP:
+            self._touch_contacts.pop(event.finger_id, None)
+            self._rebuild_touch_state()
+            return
+
+        x = int(event.x * SCREEN_W)
+        y = int(event.y * SCREEN_H)
+        actions = self._actions_for_touch_point(x, y)
+        if actions:
+            self._touch_contacts[event.finger_id] = actions
+        else:
+            self._touch_contacts.pop(event.finger_id, None)
+        self._rebuild_touch_state()
+
     def _maybe_spawn_mothership(self):
         if self._mship_spawned:
             return
@@ -1004,6 +1061,7 @@ class Game:
     def _jump_to_wave(self, wave):
         self.sfx.stop_intro_music()
         self.sfx.stop_beat()
+        self._clear_touch_state()
         self.level = max(1, min(10, wave))
         self._init_level(keep_lives=True)
         self.state = PLAYING
@@ -1042,7 +1100,12 @@ class Game:
             return
 
         keys = pygame.key.get_pressed()
-        self.player.update(keys)
+        self.player.update(keys, self._touch_state)
+        if self._touch_state["fire"]:
+            b = self.player.shoot()
+            if b:
+                self.p_bullets.append(b)
+                self.sfx.play(self.sfx.shoot)
         self._update_formation()
         self._update_enemies()
         self._try_dive()
@@ -1205,6 +1268,17 @@ class Game:
     # --- event handling ---
 
     def handle(self, event):
+        if event.type in (pygame.FINGERDOWN, pygame.FINGERMOTION, pygame.FINGERUP):
+            self._handle_touch_event(event)
+            if event.type == pygame.FINGERDOWN and self.state in (MENU, GAME_OVER, WIN):
+                if self._restart_delay_remaining_ms() > 0:
+                    return
+                self.sfx.stop_intro_music()
+                self._clear_touch_state()
+                self._reset()
+                self.state = PLAYING
+            return
+
         if event.type != pygame.KEYDOWN:
             return
         k = event.key
@@ -1219,6 +1293,7 @@ class Game:
                 if self._restart_delay_remaining_ms() > 0:
                     return
                 self.sfx.stop_intro_music()
+                self._clear_touch_state()
                 self._reset()
                 self.state = PLAYING
         elif self.state == PLAYING:
@@ -1229,15 +1304,18 @@ class Game:
                     self.sfx.play(self.sfx.shoot)
             elif k == pygame.K_ESCAPE:
                 self.sfx.stop_beat()
+                self._clear_touch_state()
                 self.state = MENU
         elif self.state in (GAME_OVER, WIN):
             if k in (pygame.K_RETURN, pygame.K_SPACE):
                 if self._restart_delay_remaining_ms() > 0:
                     return
                 self.sfx.stop_intro_music()
+                self._clear_touch_state()
                 self._reset()
                 self.state = PLAYING
             elif k == pygame.K_ESCAPE:
+                self._clear_touch_state()
                 self.state = MENU
 
     # --- drawing ---
@@ -1269,6 +1347,7 @@ class Game:
             self.player.draw(screen)
 
         self._draw_hud()
+        self._draw_touch_controls()
 
         if   self.state == GAME_OVER:   self._draw_gameover()
         elif self.state == LEVEL_CLEAR: self._draw_levelclear()
@@ -1297,6 +1376,30 @@ class Game:
         pygame.draw.line(
             screen, DIM_BLUE, (0, SCREEN_H - 36), (SCREEN_W, SCREEN_H - 36)
         )
+
+    def _draw_touch_controls(self):
+        if self.state != PLAYING:
+            return
+        if not (self._show_touch_controls or self._touch_seen):
+            return
+
+        left, right, fire = self._touch_buttons()
+        overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+
+        def draw_button(rect, label, active):
+            fill = (40, 180, 255, 140) if active else (20, 50, 90, 95)
+            border = (170, 230, 255, 230) if active else (100, 160, 220, 180)
+            pygame.draw.rect(overlay, fill, rect, border_radius=16)
+            pygame.draw.rect(overlay, border, rect, width=2, border_radius=16)
+            txt = self.f_sm.render(label, True, WHITE)
+            tx = rect.centerx - txt.get_width() // 2
+            ty = rect.centery - txt.get_height() // 2
+            overlay.blit(txt, (tx, ty))
+
+        draw_button(left, "LEFT", self._touch_state["left"])
+        draw_button(right, "RIGHT", self._touch_state["right"])
+        draw_button(fire, "FIRE", self._touch_state["fire"])
+        screen.blit(overlay, (0, 0))
 
     # --- overlays ---
 
