@@ -995,6 +995,9 @@ class Game:
         fire = pygame.Rect(SCREEN_W - 134, SCREEN_H - 134, 108, 108)
         return left, right, fire
 
+    def _start_button_rect(self):
+        return pygame.Rect(SCREEN_W // 2 - 180, 490, 360, 52)
+
     def _actions_for_touch_point(self, x, y):
         actions = set()
         left, right, fire = self._touch_buttons()
@@ -1270,13 +1273,24 @@ class Game:
     def handle(self, event):
         if event.type in (pygame.FINGERDOWN, pygame.FINGERMOTION, pygame.FINGERUP):
             self._handle_touch_event(event)
-            if event.type == pygame.FINGERDOWN and self.state in (MENU, GAME_OVER, WIN):
-                if self._restart_delay_remaining_ms() > 0:
-                    return
-                self.sfx.stop_intro_music()
-                self._clear_touch_state()
-                self._reset()
-                self.state = PLAYING
+            if event.type == pygame.FINGERDOWN:
+                if self.state in (MENU, GAME_OVER):
+                    if self._restart_delay_remaining_ms() > 0:
+                        return
+                    x = int(event.x * SCREEN_W)
+                    y = int(event.y * SCREEN_H)
+                    if self._start_button_rect().collidepoint(x, y):
+                        self.sfx.stop_intro_music()
+                        self._clear_touch_state()
+                        self._reset()
+                        self.state = PLAYING
+                elif self.state == WIN:
+                    if self._restart_delay_remaining_ms() > 0:
+                        return
+                    self.sfx.stop_intro_music()
+                    self._clear_touch_state()
+                    self._reset()
+                    self.state = PLAYING
             return
 
         if event.type != pygame.KEYDOWN:
@@ -1431,6 +1445,14 @@ class Game:
         if remaining <= 0 and (pygame.time.get_ticks() // 500) % 2 == 0:
             go = self.f_med.render("PRESS  SPACE  TO  START", True, GREEN)
             screen.blit(go, (SCREEN_W // 2 - go.get_width() // 2, 500))
+
+        if remaining <= 0 and (self._show_touch_controls or self._touch_seen):
+            btn = self._start_button_rect()
+            pygame.draw.rect(screen, (20, 90, 60), btn, border_radius=12)
+            pygame.draw.rect(screen, (120, 255, 170), btn, width=3, border_radius=12)
+            label = "TAP TO RESTART" if game_over else "TAP TO START"
+            tap = self.f_sm.render(label, True, WHITE)
+            screen.blit(tap, (btn.centerx - tap.get_width() // 2, btn.centery - tap.get_height() // 2))
 
         ctrl = self.f_sm.render("ARROWS / WASD MOVE   SPACE FIRE", True, WHITE)
         screen.blit(ctrl, (SCREEN_W // 2 - ctrl.get_width() // 2, 548))
