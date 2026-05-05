@@ -30,7 +30,7 @@ jobs:
         run: pip install pygbag
 
       - name: Build web bundle
-        run: bash [build.sh](http://_vscodecontentref_/0)
+        run: bash WASM/build.sh
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
